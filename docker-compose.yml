@@ -1,0 +1,35 @@
+services:
+  backend:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    ports:
+      - "8000:8000"
+    environment:
+      LIVENESS_HOST: "0.0.0.0"
+      LIVENESS_PORT: "8000"
+      LIVENESS_CORS_ORIGINS: '["http://localhost:5173","http://127.0.0.1:5173"]'
+      LIVENESS_DATABASE_URL: "sqlite:///./data/liveness.db"
+      LIVENESS_PHOTO_STORAGE_DIR: "./storage_data/accepted_photos"
+      LIVENESS_FACE_LANDMARKER_MODEL_PATH: "/workspace/models/face_landmarker.task"
+      LIVENESS_PRIMARY_MODEL_PATH: "/workspace/models/MiniFASNetV2.onnx"
+      LIVENESS_SECONDARY_MODEL_PATH: "/workspace/models/MiniFASNetV1SE.onnx"
+    volumes:
+      - ./models:/workspace/models
+      - liveness_db_data:/workspace/backend/data
+      - liveness_photo_data:/workspace/backend/storage_data
+
+  frontend:
+    build:
+      context: .
+      dockerfile: frontend/Dockerfile
+    ports:
+      - "5173:5173"
+    environment:
+      VITE_API_BASE_URL: "http://localhost:8000/api/v1"
+    depends_on:
+      - backend
+
+volumes:
+  liveness_db_data:
+  liveness_photo_data:

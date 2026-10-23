@@ -1,0 +1,57 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+.venv/
+venv/
+env/
+ENV/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+dist/
+build/
+*.egg-info/
+
+# Frontend / Node
+node_modules/
+frontend/dist/
+frontend/coverage/
+*.tsbuildinfo
+
+# Environment & Secrets
+.env
+.env.local
+.env.*.local
+backend/.env
+frontend/.env
+
+# Models & Biometric Data (NEVER commit weights, captures, videos, or databases)
+models/*.onnx
+models/*.pth
+models/*.pt
+models/*.tflite
+models/*.task
+!models/README.md
+backend/data/
+backend/storage_data/
+*.db
+*.sqlite
+*.sqlite3
+*.jpg
+*.jpeg
+*.png
+*.webp
+*.mp4
+*.webm
+*.avi
+
+# OS / IDE
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
