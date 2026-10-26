@@ -144,6 +144,10 @@ class LivenessPipelineService:
 
             assert latest_quality_report is not None
 
+            max_allowed_attempts = getattr(
+                self.settings, "max_attempts_per_challenge", MAX_ATTEMPTS_PER_CHALLENGE
+            )
+
             # If no frames in the batch passed basic image quality
             if not valid_analyses:
                 record.quality_issues_json = json.dumps(
@@ -154,7 +158,7 @@ class LivenessPipelineService:
                     if latest_quality_report.issues
                     else "Image quality requirements were not met."
                 )
-                if current_step.attempts >= MAX_ATTEMPTS_PER_CHALLENGE:
+                if current_step.attempts >= max_allowed_attempts:
                     record.outcome = LivenessOutcome.QUALITY_FAILED.value
                     record.completed_at = utc_now()
                     record.reason = f"Maximum attempts exceeded due to image quality: {first_issue_msg}"
@@ -179,14 +183,24 @@ class LivenessPipelineService:
                     else None,
                 )
 
-            # Evaluate active challenge pose requirements across quality-passing frames
+            # Evaluate active challenge requirements across combined rolling window + current batch
+            prior_history = self.session_service.buffer_store.get_step_history(
+                session_id=session_id,
+                challenge_id=current_step.challenge_id,
+            )
+            combined_analyses = prior_history + valid_analyses
             eval_result = self.challenge_service.evaluate_challenge_batch(
                 challenge_type=challenge_type,
-                valid_face_analyses=valid_analyses,
+                valid_face_analyses=combined_analyses,
             )
 
             if not eval_result.passed:
-                if current_step.attempts >= MAX_ATTEMPTS_PER_CHALLENGE:
+                self.session_service.buffer_store.append_step_history(
+                    session_id=session_id,
+                    challenge_id=current_step.challenge_id,
+                    analyses=valid_analyses,
+                )
+                if current_step.attempts >= max_allowed_attempts:
                     record.outcome = LivenessOutcome.CHALLENGE_FAILED.value
                     record.completed_at = utc_now()
                     record.reason = (
@@ -214,13 +228,22 @@ class LivenessPipelineService:
                     else None,
                 )
 
-            # Challenge step succeeded! Cache representative frame in transient memory
+            # Challenge step succeeded! Clear rolling history so subsequent challenges start clean
+            self.session_service.buffer_store.clear_step_history(session_id)
+
+            # Cache representative frame in transient memory
             best_idx = (
                 eval_result.best_frame_index
-                if eval_result.best_frame_index is not None
+                if (
+                    eval_result.best_frame_index is not None
+                    and 0 <= eval_result.best_frame_index < len(decoded_frames)
+                )
                 else valid_analyses[-1][0]
             )
-            best_analysis = next(a for i, a in valid_analyses if i == best_idx)
+            best_analysis = next(
+                (a for i, a in valid_analyses if i == best_idx),
+                valid_analyses[-1][1],
+            )
             self.session_service.buffer_store.record_challenge_frame(
                 session_id=session_id,
                 bgr_frame=decoded_frames[best_idx],

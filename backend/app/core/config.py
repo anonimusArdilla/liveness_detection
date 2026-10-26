@@ -126,9 +126,15 @@ class Settings(BaseSettings):
     )
 
     # Active Challenge & Session Lifecycle Thresholds
-    # Note: every session has exactly two steps (CENTER_FACE + one random challenge); the
-    # sequence length is fixed in ActiveChallengeService and intentionally not configurable.
+    # Note: every session has exactly four steps (CENTER_FACE + three uniquely sampled random challenges);
+    # the sequence length is fixed in ActiveChallengeService and intentionally not configurable.
     session_ttl_seconds: int = Field(default=180, ge=30, le=900)
+    max_attempts_per_challenge: int = Field(
+        default=40,
+        ge=5,
+        le=100,
+        description="Maximum batch submissions allowed per challenge step before failing",
+    )
     center_yaw_max_deg: float = Field(default=12.0, ge=3.0, le=30.0)
     center_pitch_max_deg: float = Field(default=16.0, ge=3.0, le=35.0)
     turn_left_min_yaw_deg: float = Field(
@@ -200,7 +206,7 @@ class Settings(BaseSettings):
     max_request_bytes: int = Field(default=6 * 1024 * 1024, ge=262144, le=25 * 1024 * 1024)
     max_frames_per_batch: int = Field(default=10, ge=2, le=30)
     min_frames_per_batch: int = Field(default=2, ge=1, le=10)
-    rate_limit_requests_per_minute: int = Field(default=60, ge=5, le=1000)
+    rate_limit_requests_per_minute: int = Field(default=180, ge=5, le=1000)
 
     @field_validator("cors_origins", mode="before")
     @classmethod

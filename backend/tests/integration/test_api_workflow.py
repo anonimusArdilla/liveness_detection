@@ -60,8 +60,13 @@ def test_full_api_capture_workflow_persists_photo_and_zero_raw_video(
         face_detector=detector,
         anti_spoofing=pad,
     )
-    # Force the CSPRNG draw so every follow-up challenge is exercised end-to-end
-    monkeypatch.setattr(container.challenge_service._rng, "choice", lambda pool: forced_follow_up)
+    # Force the CSPRNG sample so forced_follow_up is always included in the 3 random follow-ups
+    other_pool = [c for c in RANDOM_CHALLENGE_POOL if c != forced_follow_up]
+    monkeypatch.setattr(
+        container.challenge_service._rng,
+        "sample",
+        lambda pool, k: [forced_follow_up, other_pool[0], other_pool[1]],
+    )
     set_container(container)
     app = create_app(test_settings)
 
@@ -83,7 +88,7 @@ def test_full_api_capture_workflow_persists_photo_and_zero_raw_video(
             nonce = session_data["session_nonce"]
             current_challenge = session_data["current_challenge"]
             assert session_data["outcome"] == LivenessOutcome.PENDING.value
-            assert session_data["total_challenges"] == TOTAL_CHALLENGE_STEPS == 2
+            assert session_data["total_challenges"] == TOTAL_CHALLENGE_STEPS == 4
             assert current_challenge["challenge_type"] == ChallengeType.CENTER_FACE.value
             seen_types: list[str] = []
 
@@ -120,8 +125,9 @@ def test_full_api_capture_workflow_persists_photo_and_zero_raw_video(
                 steps_completed += 1
                 current_challenge = sub_json["next_challenge"]
 
-            assert steps_completed == TOTAL_CHALLENGE_STEPS
-            assert seen_types == [ChallengeType.CENTER_FACE.value, forced_follow_up.value]
+            assert steps_completed == TOTAL_CHALLENGE_STEPS == 4
+            assert seen_types[0] == ChallengeType.CENTER_FACE.value
+            assert forced_follow_up.value in seen_types[1:]
             # Verify transient memory buffers still exist prior to completion, and no disk photo yet
             assert list(test_settings.photo_storage_dir.glob("*")) == []
 

@@ -7,7 +7,13 @@ export type LivenessOutcome =
   | "VALIDATED"
   | "EXPIRED";
 
-export type ChallengeType = "CENTER_FACE" | "TURN_LEFT" | "TURN_RIGHT";
+export type ChallengeType =
+  | "CENTER_FACE"
+  | "TURN_LEFT"
+  | "TURN_RIGHT"
+  | "SMILE"
+  | "BLINK"
+  | "RAISE_EYEBROWS";
 
 export type QualityIssueCode =
   | "RESOLUTION_TOO_LOW"

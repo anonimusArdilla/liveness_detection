@@ -4,8 +4,9 @@ A modular, privacy-preserving facial liveness detection system combining **serve
 
 ## 1. Purpose and Scope
 
-- **Primary Objective:** Verify whether a live person appears to be physically present in front of a camera while detecting common presentation attacks (printed photographs and prerecorded video replayed on mobile/desktop screens).
+- **Primary Objective:** Verify whether a live person appears to be physically present in front of a camera while detecting common presentation attacks (printed photographs and prerecorded video replayed on mobile/desktop screens) through an **automated, hands-free challenge workflow**.
 - **Strict Scope Boundary:** This system implements **only** facial capture guidance, image-quality validation, active + passive liveness verification, and protected storage of the accepted portrait. It does **not** perform identity verification, document matching, or 1:1 / 1:N facial recognition.
+- **Hands-Free Automatic Capture:** The capture interface continuously samples video frames at controlled intervals (180ms), automatically detects challenge execution via rolling server-side temporal analysis, and seamlessly advances through randomized challenge steps without requiring the user to press a manual capture button for each action (manual fallback remains accessible).
 - **Privacy First:** All video streams and intermediate challenge frames are processed strictly in memory and immediately released. Raw videos are never recorded or stored. Only the single accepted frontal photograph is persisted (stripped of EXIF metadata) after `VALIDATED` confirmation.
 
 ---
@@ -15,6 +16,8 @@ A modular, privacy-preserving facial liveness detection system combining **serve
 - **Backend (`backend/`):** Python 3.11, FastAPI, Pydantic v2, OpenCV, MediaPipe Tasks (`FaceLandmarker`), ONNX Runtime (`MiniFASNetV2` + `MiniFASNetV1SE`), SQLAlchemy 2.0, and Alembic (SQLite by default, PostgreSQL-compatible).
 - **Frontend (`frontend/`):** React 18, TypeScript (strict), and Vite.
 - **Documentation (`docs/`):**
+  - [Phase 1 Audit Report](docs/automatic-capture-audit.md)
+  - [Phase 2 Hybrid Architecture & State Machine Design](docs/automatic-capture-design.md)
   - [Architecture Overview](docs/architecture.md)
   - [REST API Contract (`/api/v1`)](docs/api.md)
   - [Security & Privacy Controls](docs/security-and-privacy.md)
@@ -186,8 +189,9 @@ docker compose up --build
 | `LIVENESS_TURN_RIGHT_MIN_YAW_DEG` | `13.0` | Required positive yaw angle (deg) for `TURN_RIGHT` |
 | `LIVENESS_SPOOF_REAL_SCORE_THRESHOLD` | `0.65` | Minimum mean `Real` probability across sampled frames |
 | `LIVENESS_SPOOF_MIN_FRAME_SCORE` | `0.45` | Minimum single-frame `Real` probability |
+| `LIVENESS_MAX_ATTEMPTS_PER_CHALLENGE` | `40` | Maximum candidate batch evaluation attempts per active challenge |
 | `LIVENESS_MAX_REQUEST_BYTES` | `6291456` | Maximum HTTP request payload size (6 MiB) |
-| `LIVENESS_RATE_LIMIT_REQUESTS_PER_MINUTE` | `60` | Per-IP sliding-window rate limit |
+| `LIVENESS_RATE_LIMIT_REQUESTS_PER_MINUTE` | `180` | Per-IP sliding-window rate limit (supports continuous automated streaming) |
 
 ---
 
@@ -230,13 +234,24 @@ npm run build
 
 ---
 
-## 8. Example Capture Lifecycle Flow
+## 8. Example Automated Capture Lifecycle Flow
 
 1. **Check Readiness:** `GET /api/v1/health/ready` returns `200 OK` (`"ready": true`).
 2. **Create Session:** `POST /api/v1/sessions` with `{"registration_ref": "REG-2026-001"}` returns `session_id`, `session_nonce`, and step `0` (`CENTER_FACE`).
-3. **Submit Active Challenge Frames:** For each step (`CENTER_FACE` -> randomized `TURN_LEFT` / `TURN_RIGHT`), the client samples 3 frames at `180 ms` intervals and sends `POST /api/v1/sessions/{session_id}/challenge/frames` with monotonically increasing `timestamp_ms` values.
-4. **Finalize & Run Passive Anti-Spoofing:** Once `all_challenges_completed == true`, the client calls `POST /api/v1/sessions/{session_id}/complete` with `session_nonce`.
-5. **Decision & Persistence:** The backend runs multi-scale `MiniFASNetV2` + `MiniFASNetV1SE` ONNX inference across the session's sampled frames. Only if `outcome == "VALIDATED"` does it persist the clean JPEG portrait and return a `photo_access_token` and `verification_signature`.
+3. **Automated Continuous Frame Sampling:**
+   - The frontend samples camera frames every 180ms into an in-memory batch buffer of 3 frames.
+   - When 3 frames accumulate, the client automatically dispatches `POST /api/v1/sessions/{session_id}/challenge/frames` with monotonic timestamps.
+   - The user does not need to press a capture button; the visual indicator shows "Hands-free automatic capture active".
+4. **Server-Side Temporal Verification:**
+   - The backend maintains rolling multi-batch temporal state for the active challenge step (`TransientSessionBufferStore.get_step_history`).
+   - The backend verifies whether the requested challenge movement (`CENTER_FACE`, `TURN_LEFT`, `TURN_RIGHT`, `SMILE`, `BLINK`, or `RAISE_EYEBROWS`) occurred across the temporal window.
+5. **Progressive Step Advancement:**
+   - If verified, the server clears temporal history for that step, increments the completed step count, and returns the next authorized challenge instruction.
+   - The frontend automatically transitions to the next challenge without manual intervention.
+6. **Finalize & Run Passive Anti-Spoofing:**
+   - Once all required challenges pass (`all_challenges_completed == true`), the client triggers `POST /api/v1/sessions/{session_id}/complete` with `session_nonce`.
+   - The backend runs multi-scale `MiniFASNetV2` + `MiniFASNetV1SE` ONNX inference across the session's candidate frames.
+   - Only if `outcome == "VALIDATED"` does it persist the clean JPEG portrait and return a `photo_access_token` and HMAC `verification_signature`.
 
 ---
 

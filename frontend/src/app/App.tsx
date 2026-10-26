@@ -35,7 +35,7 @@ export const App: React.FC = () => {
     initializeSession,
     captureAndSubmitCurrentChallenge,
     abandonSession,
-  } = useLivenessSession(stopCamera);
+  } = useLivenessSession(stopCamera, videoRef);
 
   const handleStartCaptureFlow = useCallback(async () => {
     const camOk = await startCamera();
@@ -57,7 +57,14 @@ export const App: React.FC = () => {
   }, [abandonSession]);
 
   const isSessionActive =
-    phase === "CHECKING_SERVICE" || phase === "READY_FOR_CHALLENGE" || phase === "CAPTURING_BATCH";
+    phase === "CHECKING_SERVICE" ||
+    phase === "READY_FOR_CHALLENGE" ||
+    phase === "CHALLENGE_ACTIVE" ||
+    phase === "ACTION_DETECTED" ||
+    phase === "CAPTURING_EVIDENCE" ||
+    phase === "CAPTURING_BATCH" ||
+    phase === "SUBMITTING_EVIDENCE" ||
+    phase === "CHALLENGE_VERIFIED";
 
   return (
     <div className="app-shell">
@@ -138,7 +145,11 @@ export const App: React.FC = () => {
                   <ChallengeInstructions
                     challenge={currentChallenge}
                     feedbackMessage={feedbackMessage}
-                    isSubmitting={phase === "CAPTURING_BATCH" || phase === "FINALIZING"}
+                    isSubmitting={
+                      phase === "SUBMITTING_EVIDENCE" ||
+                      phase === "CAPTURING_BATCH" ||
+                      phase === "FINALIZING"
+                    }
                     onCaptureStep={handleCaptureStep}
                     onAbandon={handleRetryOrReset}
                   />

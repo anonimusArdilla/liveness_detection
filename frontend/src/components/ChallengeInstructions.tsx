@@ -25,6 +25,11 @@ export const ChallengeInstructions: React.FC<ChallengeInstructionsProps> = ({
         <span className="challenge-type-tag">{challenge.challenge_type.replace(/_/g, " ")}</span>
       </div>
 
+      <div className="auto-capture-badge" aria-live="polite">
+        <span className="auto-pulse-dot" aria-hidden="true" />
+        <span>Hands-free automatic capture active — perform action naturally</span>
+      </div>
+
       <h3 className="challenge-instruction-heading" data-testid="challenge-instruction-text">
         {challenge.instruction}
       </h3>
@@ -43,7 +48,7 @@ export const ChallengeInstructions: React.FC<ChallengeInstructionsProps> = ({
           onClick={onCaptureStep}
           data-testid="verify-challenge-btn"
         >
-          {isSubmitting ? "Capturing & Validating Frames..." : "Capture & Verify Step"}
+          {isSubmitting ? "Capturing & Validating Frames..." : "Capture Now (Manual Fallback)"}
         </button>
         <button
           type="button"

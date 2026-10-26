@@ -66,14 +66,16 @@ def test_challenge_sequence_randomization_and_structure(test_settings: Settings)
     sequences = [tuple(ctype for ctype, _ in svc.generate_challenge_sequence()) for _ in range(400)]
 
     for seq in sequences:
-        # Mandatory CENTER_FACE followed by exactly one randomly drawn challenge
-        assert len(seq) == TOTAL_CHALLENGE_STEPS == 2
+        # Mandatory CENTER_FACE followed by three uniquely sampled random challenges
+        assert len(seq) == TOTAL_CHALLENGE_STEPS == 4
         assert seq[0] == ChallengeType.CENTER_FACE
-        assert seq[1] in RANDOM_CHALLENGE_POOL
-        assert seq[1] != ChallengeType.CENTER_FACE
+        assert len(seq[1:]) == 3
+        assert len(set(seq[1:])) == 3
+        assert all(c in RANDOM_CHALLENGE_POOL for c in seq[1:])
 
-    # Every challenge in the pool (turns + expressions) is reachable
-    assert {seq[1] for seq in sequences} == set(RANDOM_CHALLENGE_POOL)
+    # Every challenge in the pool (turns + expressions) is reachable across sessions
+    all_follow_ups = {c for seq in sequences for c in seq[1:]}
+    assert all_follow_ups == set(RANDOM_CHALLENGE_POOL)
     assert set(RANDOM_CHALLENGE_POOL) == {
         ChallengeType.TURN_LEFT,
         ChallengeType.TURN_RIGHT,
@@ -294,12 +296,12 @@ def test_created_session_has_exactly_two_steps(test_settings: Settings) -> None:
     with next(db_mgr.get_session()) as db:
         repo = SessionRepository(db)
         created = session_svc.create_session(repo)
-        assert created.total_challenges == 2
+        assert created.total_challenges == TOTAL_CHALLENGE_STEPS == 4
         assert created.current_challenge.challenge_type == ChallengeType.CENTER_FACE
         record = repo.get_session(created.session_id)
         assert record is not None
-        assert len(record.challenges) == 2
-        assert ChallengeType(record.challenges[1].challenge_type) in RANDOM_CHALLENGE_POOL
+        assert len(record.challenges) == TOTAL_CHALLENGE_STEPS == 4
+        assert all(ChallengeType(c.challenge_type) in RANDOM_CHALLENGE_POOL for c in record.challenges[1:])
 
 
 def test_session_expiration_and_nonce_verification(test_settings: Settings) -> None:

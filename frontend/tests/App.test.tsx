@@ -63,6 +63,10 @@ const CREATED_SESSION: CreateSessionResponse = {
 beforeEach(() => {
   mockTrackStop.mockClear();
   HTMLMediaElement.prototype.play = vi.fn().mockResolvedValue(undefined);
+  Object.defineProperty(HTMLMediaElement.prototype, "paused", {
+    configurable: true,
+    get: () => false,
+  });
   HTMLCanvasElement.prototype.getContext = vi.fn().mockReturnValue({
     drawImage: vi.fn(),
     getImageData: () => ({
@@ -400,5 +404,99 @@ describe("Facial Liveness Verification Frontend", () => {
     expect(
       screen.getByRole("button", { name: /Enable Camera & Start Liveness Check/i }),
     ).toBeInTheDocument();
+  });
+
+  it("automatically samples frames and progresses challenges without clicking manual capture button", async () => {
+    const user = userEvent.setup();
+    Object.defineProperty(navigator, "mediaDevices", {
+      writable: true,
+      configurable: true,
+      value: {
+        getUserMedia: vi.fn().mockResolvedValue(createMockMediaStream()),
+      },
+    });
+
+    vi.spyOn(livenessApiClient, "checkReadiness").mockResolvedValue(READY_HEALTH);
+    vi.spyOn(livenessApiClient, "createSession").mockResolvedValue({
+      ...CREATED_SESSION,
+      total_challenges: 1,
+      current_challenge: {
+        ...CREATED_SESSION.current_challenge,
+        total_steps: 1,
+      },
+    });
+
+    const submitSpy = vi.spyOn(livenessApiClient, "submitChallengeFrames").mockResolvedValue({
+      session_id: CREATED_SESSION.session_id,
+      outcome: "PENDING",
+      challenge_passed: true,
+      step_index: 0,
+      total_steps: 1,
+      feedback_message: "Challenge 'CENTER_FACE' verified automatically.",
+      quality_report: {
+        passed: true,
+        width: 640,
+        height: 480,
+        brightness: 130,
+        blur_score: 120,
+        face_count: 1,
+        face_area_ratio: 0.18,
+        center_offset_ratio: 0.02,
+        bounding_box: { x: 200, y: 120, width: 220, height: 220 },
+        head_pose: { yaw: 0.0, pitch: 0.0, roll: 0.0 },
+        issues: [],
+      },
+      all_challenges_completed: true,
+      next_challenge: null,
+    });
+
+    const completeSpy = vi.spyOn(livenessApiClient, "completeSession").mockResolvedValue({
+      session_id: CREATED_SESSION.session_id,
+      registration_ref: "REG-2026-001",
+      outcome: "VALIDATED",
+      validated: true,
+      created_at: "2026-10-22T21:00:00Z",
+      expires_at: "2026-10-22T21:03:00Z",
+      completed_at: "2026-10-22T21:00:25Z",
+      reason: "Facial liveness validated hands-free.",
+      quality_passed: true,
+      challenges_passed: true,
+      passive_spoof_passed: true,
+      passive_report: {
+        passed: true,
+        aggregate_real_score: 0.98,
+        min_frame_real_score: 0.95,
+        frames_evaluated: 3,
+        threshold_applied: 0.65,
+        model_name: "MiniFASNetV2+MiniFASNetV1SE",
+      },
+      quality_issues: [],
+      photo_available: true,
+      photo_access_token: "tok-auto-photo-123",
+      verification_signature: "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789",
+    });
+
+    render(<App />);
+
+    await user.click(
+      screen.getByRole("button", { name: /Enable Camera & Start Liveness Check/i }),
+    );
+
+    // Verify auto capture indicator is present
+    await waitFor(() => {
+      expect(
+        screen.getByText(/Hands-free automatic capture active/i),
+      ).toBeInTheDocument();
+    });
+
+    // Without any click on verify-challenge-btn, the automated sampling loop should collect frames and trigger verification
+    await waitFor(
+      () => {
+        expect(submitSpy).toHaveBeenCalled();
+        expect(completeSpy).toHaveBeenCalled();
+        expect(screen.getByTestId("validation-result-card")).toHaveTextContent("VALIDATED");
+      },
+      { timeout: 3000 },
+    );
   });
 });

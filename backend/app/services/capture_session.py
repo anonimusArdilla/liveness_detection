@@ -27,7 +27,7 @@ from app.schemas.liveness import (
     SessionResultResponse,
 )
 from app.services.challenge import ActiveChallengeService
-from app.vision.face_landmarks import BoundingBox
+from app.vision.face_landmarks import BoundingBox, FaceAnalysis
 
 TERMINAL_OUTCOMES: frozenset[str] = frozenset(
     {
@@ -71,6 +71,8 @@ class SessionTransientBuffers:
     expires_at: datetime
     frontal_frame: np.ndarray | None = None
     sampled_frames: list[tuple[np.ndarray, BoundingBox]] = field(default_factory=list)
+    active_challenge_id: str | None = None
+    step_history: list[tuple[int, FaceAnalysis]] = field(default_factory=list)
 
     def clear(self) -> None:
         if self.frontal_frame is not None:
@@ -79,6 +81,31 @@ class SessionTransientBuffers:
         for frame, _ in self.sampled_frames:
             del frame
         self.sampled_frames.clear()
+        self.step_history.clear()
+        self.active_challenge_id = None
+
+    def get_step_history(self, challenge_id: str) -> list[tuple[int, FaceAnalysis]]:
+        if self.active_challenge_id != challenge_id:
+            self.step_history.clear()
+            self.active_challenge_id = challenge_id
+        return list(self.step_history)
+
+    def append_step_history(
+        self,
+        challenge_id: str,
+        analyses: list[tuple[int, FaceAnalysis]],
+        max_history: int = 8,
+    ) -> None:
+        if self.active_challenge_id != challenge_id:
+            self.step_history.clear()
+            self.active_challenge_id = challenge_id
+        self.step_history.extend(analyses)
+        if len(self.step_history) > max_history:
+            self.step_history = self.step_history[-max_history:]
+
+    def clear_step_history(self) -> None:
+        self.step_history.clear()
+        self.active_challenge_id = None
 
 
 class TransientSessionBufferStore:
@@ -121,6 +148,31 @@ class TransientSessionBufferStore:
             buf = self._buffers.pop(session_id, None)
             if buf is not None:
                 buf.clear()
+
+    def get_step_history(self, session_id: str, challenge_id: str) -> list[tuple[int, FaceAnalysis]]:
+        with self._lock:
+            buf = self._buffers.get(session_id)
+            if buf is None:
+                return []
+            return buf.get_step_history(challenge_id)
+
+    def append_step_history(
+        self,
+        session_id: str,
+        challenge_id: str,
+        analyses: list[tuple[int, FaceAnalysis]],
+        max_history: int = 8,
+    ) -> None:
+        with self._lock:
+            buf = self._buffers.get(session_id)
+            if buf is not None:
+                buf.append_step_history(challenge_id, analyses, max_history)
+
+    def clear_step_history(self, session_id: str) -> None:
+        with self._lock:
+            buf = self._buffers.get(session_id)
+            if buf is not None:
+                buf.clear_step_history()
 
     def _purge_expired_locked(self) -> None:
         now = utc_now()
