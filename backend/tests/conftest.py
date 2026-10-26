@@ -80,6 +80,8 @@ class StubFaceDetector(FaceDetectorProvider):
                 )
             ]
         )
+        self.face_sequence: list[list[FaceAnalysis]] | None = None
+        self._sequence_pos = 0
 
     def status(self) -> ModelStatusSchema:
         return ModelStatusSchema(
@@ -94,7 +96,17 @@ class StubFaceDetector(FaceDetectorProvider):
     def detect_faces(self, bgr_image: np.ndarray) -> list[FaceAnalysis]:
         if not self.ready:
             raise RuntimeError("Stub detector is not ready")
+        # Optional per-call sequence (cycled) to simulate temporal changes such as blinks.
+        if self.face_sequence:
+            faces = self.face_sequence[self._sequence_pos % len(self.face_sequence)]
+            self._sequence_pos += 1
+            return list(faces)
         return list(self.faces_to_return)
+
+    def set_face_sequence(self, sequence: list[list[FaceAnalysis]] | None) -> None:
+        """Configure faces returned on successive detect_faces calls (None disables)."""
+        self.face_sequence = sequence
+        self._sequence_pos = 0
 
 
 class StubAntiSpoofingProvider(AntiSpoofingProvider):
@@ -163,7 +175,6 @@ def test_settings(tmp_path: Path) -> Settings:
         database_url=f"sqlite:///{db_file.as_posix()}",
         photo_storage_dir=photos_dir,
         session_ttl_seconds=120,
-        challenge_count=3,
         min_frames_per_batch=2,
         max_frames_per_batch=6,
         min_challenge_passing_frames=2,

@@ -22,11 +22,18 @@ class LivenessOutcome(StrEnum):
 
 
 class ChallengeType(StrEnum):
-    """Supported server-controlled active liveness challenge actions."""
+    """Supported server-controlled active liveness challenge actions.
+
+    `CENTER_FACE` is always the first step; exactly one of the remaining actions is
+    drawn at random by the server as the second (final) step.
+    """
 
     CENTER_FACE = "CENTER_FACE"
     TURN_LEFT = "TURN_LEFT"
     TURN_RIGHT = "TURN_RIGHT"
+    SMILE = "SMILE"
+    BLINK = "BLINK"
+    RAISE_EYEBROWS = "RAISE_EYEBROWS"
 
 
 class QualityIssueCode(StrEnum):

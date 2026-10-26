@@ -23,7 +23,7 @@ from app.services.challenge import ActiveChallengeService
 from app.services.image_quality import ImageQualityService
 from app.services.liveness_pipeline import LivenessPipelineService
 from app.storage.local_storage import LocalPrivatePhotoStorage
-from app.vision.face_landmarks import BoundingBox, FaceAnalysis, HeadPose
+from app.vision.face_landmarks import BoundingBox, FaceAnalysis, FacialExpression, HeadPose
 from app.vision.providers.minifasnet_onnx import MiniFASNetOnnxProvider
 
 from tests.conftest import (
@@ -32,20 +32,33 @@ from tests.conftest import (
     make_encoded_test_frame,
 )
 
+NEUTRAL_EXPR = FacialExpression(smile=0.05, eyes_closed=0.05, eyes_open_max=0.08, brow_raise=0.1)
 
-def _pose_for_challenge(ctype: ChallengeType) -> FaceAnalysis:
-    yaw = 0.0
-    if ctype == ChallengeType.TURN_LEFT:
-        yaw = -20.0
-    elif ctype == ChallengeType.TURN_RIGHT:
-        yaw = 20.0
+
+def _face(yaw: float = 0.0, expression: FacialExpression = NEUTRAL_EXPR) -> FaceAnalysis:
     return FaceAnalysis(
         bounding_box=BoundingBox(x=200, y=120, width=220, height=220),
         face_area_ratio=0.18,
         center_offset_ratio=0.03,
         head_pose=HeadPose(yaw=yaw, pitch=0.0, roll=0.0),
         landmarks_count=478,
+        expression=expression,
     )
+
+
+def _faces_for_challenge(ctype: ChallengeType) -> list[list[FaceAnalysis]]:
+    """Per-frame detector output satisfying the given challenge (cycled by StubFaceDetector)."""
+    if ctype == ChallengeType.TURN_LEFT:
+        return [[_face(yaw=-20.0)]]
+    if ctype == ChallengeType.TURN_RIGHT:
+        return [[_face(yaw=20.0)]]
+    if ctype == ChallengeType.SMILE:
+        return [[_face(expression=FacialExpression(0.8, 0.05, 0.08, 0.1))]]
+    if ctype == ChallengeType.RAISE_EYEBROWS:
+        return [[_face(expression=FacialExpression(0.05, 0.05, 0.08, 0.7))]]
+    if ctype == ChallengeType.BLINK:
+        return [[_face()], [_face(expression=FacialExpression(0.05, 0.85, 0.9, 0.1))]]
+    return [[_face()]]
 
 
 def test_missing_or_corrupt_onnx_model_reports_not_ready(tmp_path: Path) -> None:
@@ -97,7 +110,7 @@ def test_pipeline_fails_closed_when_passive_model_detects_spoof(
         challenge: ChallengeInstructionSchema | None = session.current_challenge
 
         while challenge is not None:
-            detector.faces_to_return = [_pose_for_challenge(challenge.challenge_type)]
+            detector.set_face_sequence(_faces_for_challenge(challenge.challenge_type))
             resp = pipeline.submit_challenge_frames(
                 repo=repo,
                 session_id=session.session_id,
@@ -157,7 +170,7 @@ def test_pipeline_fails_closed_when_inference_throws_error(
         challenge: ChallengeInstructionSchema | None = session.current_challenge
 
         while challenge is not None:
-            detector.faces_to_return = [_pose_for_challenge(challenge.challenge_type)]
+            detector.set_face_sequence(_faces_for_challenge(challenge.challenge_type))
             resp = pipeline.submit_challenge_frames(
                 repo=repo,
                 session_id=session.session_id,

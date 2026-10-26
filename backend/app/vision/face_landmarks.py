@@ -1,8 +1,9 @@
-"""Facial landmark geometry and 3D head-pose estimation for active liveness challenges."""
+"""Facial landmark geometry, 3D head-pose and expression estimation for active liveness challenges."""
 
 from __future__ import annotations
 
 import math
+from collections.abc import Mapping
 from dataclasses import dataclass
 
 import numpy as np
@@ -22,6 +23,13 @@ RIGHT_CHEEK_IDX = 234
 LEFT_CHEEK_IDX = 454
 RIGHT_EYE_OUTER_IDX = 33
 LEFT_EYE_OUTER_IDX = 263
+
+# MediaPipe FaceLandmarker blendshape category names (ARKit-compatible, 52 categories)
+# used to derive the expression scores evaluated by active expression challenges.
+BLENDSHAPE_SMILE = ("mouthSmileLeft", "mouthSmileRight")
+BLENDSHAPE_EYE_BLINK = ("eyeBlinkLeft", "eyeBlinkRight")
+BLENDSHAPE_BROW_INNER_UP = "browInnerUp"
+BLENDSHAPE_BROW_OUTER_UP = ("browOuterUpLeft", "browOuterUpRight")
 
 
 @dataclass(frozen=True)
@@ -71,14 +79,73 @@ class HeadPose:
 
 
 @dataclass(frozen=True)
+class FacialExpression:
+    """Facial expression activation scores in [0, 1] derived from MediaPipe blendshapes.
+
+    - smile: Mean of left/right `mouthSmile` activations.
+    - eyes_closed: MIN of left/right `eyeBlink` activations (both eyes must close; a wink
+      or a single occluded eye does not count as a blink).
+    - eyes_open_max: MAX of left/right `eyeBlink` activations (both eyes must be open for
+      this value to be low).
+    - brow_raise: Mean of `browInnerUp` and the averaged left/right `browOuterUp` activations.
+    """
+
+    smile: float
+    eyes_closed: float
+    eyes_open_max: float
+    brow_raise: float
+
+
+@dataclass(frozen=True)
 class FaceAnalysis:
-    """Complete geometric and landmark analysis for a single detected face."""
+    """Complete geometric and landmark analysis for a single detected face.
+
+    `expression` is None when the detector does not provide blendshape output; expression
+    challenges must fail closed in that case.
+    """
 
     bounding_box: BoundingBox
     face_area_ratio: float
     center_offset_ratio: float
     head_pose: HeadPose
     landmarks_count: int
+    expression: FacialExpression | None = None
+
+
+def _clamp_unit(value: float) -> float:
+    """Clamp a score to [0, 1], mapping NaN/inf to 0.0 (fail-safe for downstream thresholds)."""
+    if not math.isfinite(value):
+        return 0.0
+    return min(1.0, max(0.0, value))
+
+
+def expression_from_blendshapes(scores: Mapping[str, float]) -> FacialExpression | None:
+    """Derive smile/blink/eyebrow-raise scores from MediaPipe blendshape category scores.
+
+    Returns None when any required category is missing so callers fail closed rather than
+    silently treating a missing activation as 0.0.
+    """
+    required = (
+        *BLENDSHAPE_SMILE,
+        *BLENDSHAPE_EYE_BLINK,
+        BLENDSHAPE_BROW_INNER_UP,
+        *BLENDSHAPE_BROW_OUTER_UP,
+    )
+    if any(name not in scores for name in required):
+        return None
+
+    s = {name: _clamp_unit(float(scores[name])) for name in required}
+    smile = (s[BLENDSHAPE_SMILE[0]] + s[BLENDSHAPE_SMILE[1]]) / 2.0
+    blink_left, blink_right = s[BLENDSHAPE_EYE_BLINK[0]], s[BLENDSHAPE_EYE_BLINK[1]]
+    outer_up = (s[BLENDSHAPE_BROW_OUTER_UP[0]] + s[BLENDSHAPE_BROW_OUTER_UP[1]]) / 2.0
+    brow_raise = (s[BLENDSHAPE_BROW_INNER_UP] + outer_up) / 2.0
+
+    return FacialExpression(
+        smile=round(smile, 4),
+        eyes_closed=round(min(blink_left, blink_right), 4),
+        eyes_open_max=round(max(blink_left, blink_right), 4),
+        brow_raise=round(brow_raise, 4),
+    )
 
 
 def compute_bounding_box(landmarks: list[Point3D], image_width: int, image_height: int) -> BoundingBox:
@@ -168,8 +235,9 @@ def analyze_face_landmarks(
     image_width: int,
     image_height: int,
     transformation_matrix: np.ndarray | None = None,
+    blendshapes: Mapping[str, float] | None = None,
 ) -> FaceAnalysis:
-    """Compute bounding box, area ratio, centering offset, and 3D head pose for a face."""
+    """Compute bounding box, area ratio, centering offset, 3D head pose and expression for a face."""
     bbox = compute_bounding_box(landmarks, image_width, image_height)
     frame_area = float(max(1, image_width * image_height))
     face_area_ratio = round(bbox.area / frame_area, 4)
@@ -188,4 +256,5 @@ def analyze_face_landmarks(
         center_offset_ratio=center_offset_ratio,
         head_pose=head_pose,
         landmarks_count=len(landmarks),
+        expression=expression_from_blendshapes(blendshapes) if blendshapes is not None else None,
     )

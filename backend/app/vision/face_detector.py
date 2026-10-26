@@ -81,9 +81,11 @@ class MediaPipeFaceDetector(FaceDetectorProvider):
 
             # Pass model_asset_buffer directly to avoid Windows non-ASCII path issues in C++ TFLite loader
             base_options = mp_python.BaseOptions(model_asset_buffer=model_bytes)
+            # Blendshapes come from face_blendshapes.tflite bundled inside face_landmarker.task;
+            # they drive the SMILE / BLINK / RAISE_EYEBROWS expression challenges.
             options = mp_vision.FaceLandmarkerOptions(
                 base_options=base_options,
-                output_face_blendshapes=False,
+                output_face_blendshapes=True,
                 output_facial_transformation_matrixes=True,
                 num_faces=self.max_faces,
                 min_face_detection_confidence=self.min_confidence,
@@ -122,16 +124,27 @@ class MediaPipeFaceDetector(FaceDetectorProvider):
 
             analyses: list[FaceAnalysis] = []
             matrices = result.facial_transformation_matrixes or []
+            blendshape_lists = result.face_blendshapes or []
 
             for idx, face_lms in enumerate(result.face_landmarks):
                 points = [Point3D(x=float(lm.x), y=float(lm.y), z=float(lm.z)) for lm in face_lms]
                 matrix = np.asarray(matrices[idx], dtype=np.float64) if idx < len(matrices) else None
+                blendshapes = (
+                    {
+                        str(cat.category_name): float(cat.score)
+                        for cat in blendshape_lists[idx]
+                        if cat.category_name
+                    }
+                    if idx < len(blendshape_lists)
+                    else None
+                )
                 analyses.append(
                     analyze_face_landmarks(
                         landmarks=points,
                         image_width=width,
                         image_height=height,
                         transformation_matrix=matrix,
+                        blendshapes=blendshapes,
                     )
                 )
             return analyses

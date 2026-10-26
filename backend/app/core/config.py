@@ -6,7 +6,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Literal
 
-from pydantic import Field, field_validator
+from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 BACKEND_ROOT = Path(__file__).resolve().parents[2]
@@ -126,8 +126,9 @@ class Settings(BaseSettings):
     )
 
     # Active Challenge & Session Lifecycle Thresholds
+    # Note: every session has exactly two steps (CENTER_FACE + one random challenge); the
+    # sequence length is fixed in ActiveChallengeService and intentionally not configurable.
     session_ttl_seconds: int = Field(default=180, ge=30, le=900)
-    challenge_count: int = Field(default=3, ge=2, le=5)
     center_yaw_max_deg: float = Field(default=12.0, ge=3.0, le=30.0)
     center_pitch_max_deg: float = Field(default=16.0, ge=3.0, le=35.0)
     turn_left_min_yaw_deg: float = Field(
@@ -143,6 +144,42 @@ class Settings(BaseSettings):
         description="Minimum (positive) yaw angle threshold required to pass TURN_RIGHT",
     )
     min_challenge_passing_frames: int = Field(default=2, ge=1, le=10)
+
+    # Expression Challenge Thresholds (MediaPipe blendshape activations in [0, 1])
+    expression_neutral_max_score: float = Field(
+        default=0.35,
+        ge=0.1,
+        le=0.8,
+        description=(
+            "Maximum smile / eyebrow-raise activation allowed during CENTER_FACE so the "
+            "frontal reference frame is neutral and a single static photo cannot pass an "
+            "expression challenge as well"
+        ),
+    )
+    smile_min_score: float = Field(
+        default=0.55,
+        ge=0.2,
+        le=0.95,
+        description="Minimum mean mouthSmileLeft/Right activation required to pass SMILE",
+    )
+    eyebrow_raise_min_score: float = Field(
+        default=0.5,
+        ge=0.2,
+        le=0.95,
+        description="Minimum combined browInnerUp/browOuterUp activation required to pass RAISE_EYEBROWS",
+    )
+    blink_closed_min_score: float = Field(
+        default=0.5,
+        ge=0.25,
+        le=0.95,
+        description="Minimum eyeBlink activation of BOTH eyes for a frame to count as eyes-closed",
+    )
+    blink_open_max_score: float = Field(
+        default=0.3,
+        ge=0.05,
+        le=0.6,
+        description="Maximum eyeBlink activation of EITHER eye for a frame to count as eyes-open",
+    )
 
     # Passive Anti-Spoofing Decision Thresholds
     spoof_real_score_threshold: float = Field(
@@ -195,6 +232,18 @@ class Settings(BaseSettings):
         if not p.is_absolute():
             return (BACKEND_ROOT / p).resolve()
         return p
+
+    @model_validator(mode="after")
+    def validate_expression_thresholds(self) -> Settings:
+        """Ensure expression thresholds leave a strict margin between neutral and active states."""
+        if self.blink_open_max_score >= self.blink_closed_min_score:
+            raise ValueError("blink_open_max_score must be strictly lower than blink_closed_min_score")
+        if self.expression_neutral_max_score >= min(self.smile_min_score, self.eyebrow_raise_min_score):
+            raise ValueError(
+                "expression_neutral_max_score must be strictly lower than smile_min_score "
+                "and eyebrow_raise_min_score"
+            )
+        return self
 
 
 @lru_cache

@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import pytest
 from app.api.dependencies import build_service_container, set_container
 from app.core.config import Settings
 from app.main import create_app
 from app.schemas.liveness import ChallengeType, LivenessOutcome
-from app.vision.face_landmarks import BoundingBox, FaceAnalysis, HeadPose
+from app.services.challenge import RANDOM_CHALLENGE_POOL, TOTAL_CHALLENGE_STEPS
+from app.vision.face_landmarks import BoundingBox, FaceAnalysis, FacialExpression, HeadPose
 from fastapi.testclient import TestClient
 
 from tests.conftest import (
@@ -15,24 +17,41 @@ from tests.conftest import (
     make_encoded_test_frame,
 )
 
+NEUTRAL_EXPR = FacialExpression(smile=0.05, eyes_closed=0.05, eyes_open_max=0.08, brow_raise=0.1)
 
-def _pose_for_type(ctype: str) -> FaceAnalysis:
-    yaw = 0.0
-    if ctype == ChallengeType.TURN_LEFT.value:
-        yaw = -21.0
-    elif ctype == ChallengeType.TURN_RIGHT.value:
-        yaw = 21.0
+
+def _face(yaw: float = 0.0, expression: FacialExpression = NEUTRAL_EXPR) -> FaceAnalysis:
     return FaceAnalysis(
         bounding_box=BoundingBox(x=200, y=120, width=220, height=220),
         face_area_ratio=0.18,
         center_offset_ratio=0.02,
         head_pose=HeadPose(yaw=yaw, pitch=0.0, roll=0.0),
         landmarks_count=478,
+        expression=expression,
     )
 
 
+def _face_sequence_for_type(ctype: str) -> list[list[FaceAnalysis]]:
+    """Per-frame detector output that satisfies the given challenge type."""
+    if ctype == ChallengeType.TURN_LEFT.value:
+        return [[_face(yaw=-21.0)]]
+    if ctype == ChallengeType.TURN_RIGHT.value:
+        return [[_face(yaw=21.0)]]
+    if ctype == ChallengeType.SMILE.value:
+        return [[_face(expression=FacialExpression(0.82, 0.05, 0.08, 0.1))]]
+    if ctype == ChallengeType.RAISE_EYEBROWS.value:
+        return [[_face(expression=FacialExpression(0.05, 0.05, 0.08, 0.72))]]
+    if ctype == ChallengeType.BLINK.value:
+        # open -> closed transition across consecutive frames
+        return [[_face()], [_face(expression=FacialExpression(0.05, 0.85, 0.9, 0.1))]]
+    return [[_face()]]
+
+
+@pytest.mark.parametrize("forced_follow_up", RANDOM_CHALLENGE_POOL)
 def test_full_api_capture_workflow_persists_photo_and_zero_raw_video(
     test_settings: Settings,
+    forced_follow_up: ChallengeType,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     detector = StubFaceDetector(ready=True)
     pad = StubAntiSpoofingProvider(ready=True, real_score=0.94)
@@ -41,6 +60,8 @@ def test_full_api_capture_workflow_persists_photo_and_zero_raw_video(
         face_detector=detector,
         anti_spoofing=pad,
     )
+    # Force the CSPRNG draw so every follow-up challenge is exercised end-to-end
+    monkeypatch.setattr(container.challenge_service._rng, "choice", lambda pool: forced_follow_up)
     set_container(container)
     app = create_app(test_settings)
 
@@ -62,6 +83,9 @@ def test_full_api_capture_workflow_persists_photo_and_zero_raw_video(
             nonce = session_data["session_nonce"]
             current_challenge = session_data["current_challenge"]
             assert session_data["outcome"] == LivenessOutcome.PENDING.value
+            assert session_data["total_challenges"] == TOTAL_CHALLENGE_STEPS == 2
+            assert current_challenge["challenge_type"] == ChallengeType.CENTER_FACE.value
+            seen_types: list[str] = []
 
             # 3. Progressive challenge execution
             _, b64 = make_encoded_test_frame(640, 480)
@@ -76,7 +100,8 @@ def test_full_api_capture_workflow_persists_photo_and_zero_raw_video(
                     get_chal.json()["current_challenge"]["challenge_id"] == current_challenge["challenge_id"]
                 )
 
-                detector.faces_to_return = [_pose_for_type(current_challenge["challenge_type"])]
+                seen_types.append(current_challenge["challenge_type"])
+                detector.set_face_sequence(_face_sequence_for_type(current_challenge["challenge_type"]))
                 submit_resp = client.post(
                     f"/api/v1/sessions/{session_id}/challenge/frames",
                     json={
@@ -95,7 +120,8 @@ def test_full_api_capture_workflow_persists_photo_and_zero_raw_video(
                 steps_completed += 1
                 current_challenge = sub_json["next_challenge"]
 
-            assert steps_completed == test_settings.challenge_count
+            assert steps_completed == TOTAL_CHALLENGE_STEPS
+            assert seen_types == [ChallengeType.CENTER_FACE.value, forced_follow_up.value]
             # Verify transient memory buffers still exist prior to completion, and no disk photo yet
             assert list(test_settings.photo_storage_dir.glob("*")) == []
 
